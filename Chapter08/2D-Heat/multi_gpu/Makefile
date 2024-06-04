@@ -2,7 +2,8 @@
 #include make-crusher.def
 #include make-perlmutter.def
 #include make-crusher.def
-include make-cori-gpu.def
+# include make-cori-gpu.def
+include make-rwth-claix2023-gpu.def
 
 
 all: omp_heat_multi omp_uvm_heat_multi mpi_omp_heat_multi mpi_omp_uvm_heat_multi ven_heat_multi
