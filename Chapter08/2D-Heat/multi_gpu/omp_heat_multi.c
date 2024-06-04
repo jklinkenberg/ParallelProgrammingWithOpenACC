@@ -11,13 +11,21 @@
 
 #define I2D(ni, i, j) ((i) + (ni) * (j))
 
+#ifndef USE_DEVICE_AFFINITY
+#define USE_DEVICE_AFFINITY 0
+#endif
+
+#ifndef USE_CLOSEST_DEVICE
+#define USE_CLOSEST_DEVICE 1
+#endif
+
 #pragma omp declare target
-void step_kernel_cpu(int ni, int nj, double tfac, double *temp_in, double *temp_out)
+void step_kernel_cpu(int ni, int nj, double tfac, double *temp_in, double *temp_out, int dev)
 {
     int i, j, i00, im10, ip10, i0m1, i0p1;
     double d2tdx2, d2tdy2;
 
-#pragma omp target teams distribute parallel for simd collapse(2)
+#pragma omp target teams distribute parallel for simd collapse(2) device(dev)
     for (j = 1; j < nj - 1; j++)
     {
         for (i = 1; i < ni - 1; i++)
@@ -60,15 +68,19 @@ int main(int argc, char *argv[])
     nj = atoi(argv[3]);
     nstep = atoi(argv[4]);
     // fp = atos(argv[5]);
-    temp1_h = (double *)malloc(sizeof(double) * (ni + 2) * (nj + 2));
-    temp2_h = (double *)malloc(sizeof(double) * (ni + 2) * (nj + 2));
+
+    size_t num_elements = (ni + 2) * (nj + 2);
+
+    temp1_h = (double *)malloc(sizeof(double) * num_elements);
+    temp2_h = (double *)malloc(sizeof(double) * num_elements);
 
     for (j = 1; j < nj + 1; j++)
     {
         for (i = 1; i < ni + 1; i++)
         {
             i2d = i + (ni + 2) * j;
-            temp1_h[i2d] = 0.0;
+            temp1_h[i2d] = 0.0001f;
+            temp2_h[i2d] = 0.0001f;
         }
     }
 
@@ -76,9 +88,9 @@ int main(int argc, char *argv[])
     temp_br = 300.0f;
     temp_tl = 200.0f;
     temp_tr = 300.0f;
+
     for (i = 0; i < ni + 2; i++)
     {
-
         j = 0;
         i2d = i + (ni + 2) * j;
         temp1_h[i2d] = temp_bl + (temp_br - temp_bl) * (double)i / (double)(ni + 1);
@@ -98,7 +110,7 @@ int main(int argc, char *argv[])
         i2d = i + (ni + 2) * j;
         temp1_h[i2d] = temp_br + (temp_tr - temp_br) * (double)j / (double)(nj + 1);
     }
-    memcpy(temp2_h, temp1_h, sizeof(double) * (ni + 2) * (nj + 2));
+    memcpy(temp2_h, temp1_h, sizeof(double) * num_elements);
 
     tfac = 0.2;
 
@@ -112,8 +124,8 @@ int main(int argc, char *argv[])
     LDA = ni + 2;
 
     int numAvailDevices = omp_get_num_devices();
-
-    int numDevices = NUM_THREADS;
+    int numDevices = numAvailDevices;
+    // int numDevices = NUM_THREADS;
     int chosenDev;
 
     printf("Number of devices available is : %d\n", numAvailDevices);
@@ -124,7 +136,20 @@ int main(int argc, char *argv[])
     {
         double *temp1, *temp2, *temp_tmp;
         int tid = omp_get_thread_num();
+        int devices_in_order[numAvailDevices];
+        int n_dev_found;
+
+#if USE_DEVICE_AFFINITY
+        n_dev_found = omp_get_devices_in_order(numAvailDevices, devices_in_order);
+#if USE_CLOSEST_DEVICE
+        chosenDev = devices_in_order[0];
+#else
+        chosenDev = devices_in_order[n_dev_found - 1];
+#endif // USE_CLOSEST_DEVICE
+#else
         chosenDev = tid % numDevices; // tid modulo number of devices
+#endif // USE_DEVICE_AFFINITY
+
         // TODO: Check how host can also participate in computation
         // acc_set_device_num(tid+1, acc_device_not_host);
         temp1 = temp1_h + tid * rows * LDA;
@@ -135,7 +160,7 @@ int main(int argc, char *argv[])
         {
             for (istep = 0; istep < nstep; istep++)
             {
-                step_kernel_cpu(ni + 2, rows + 2, tfac, temp1, temp2);
+                step_kernel_cpu(ni + 2, rows + 2, tfac, temp1, temp2, chosenDev);
                 /* update the lower halo to the host except the last device*/
                 if (tid != NUM_THREADS - 1)
                 {
@@ -176,7 +201,7 @@ int main(int argc, char *argv[])
 
     gettimeofday(&tim, NULL);
     end = tim.tv_sec + (tim.tv_usec / 1000000.0);
-    printf("Time for computing: %.2f s\n", end - start);
+    printf("Time for computing: %f s\n", end - start);
 
     /* output temp1 to a binary file */
 
@@ -187,15 +212,15 @@ int main(int argc, char *argv[])
 
     /* output temp1 to a text file */
 
-    fp = fopen(argv[5], "w");
-    fprintf(fp, "%d %d\n", ni, nj);
-    for (j = 0; j < nj; j++)
-    {
-        for (i = 0; i < ni; i++)
-        {
-            fprintf(fp, "%.4f\n", j, i, temp1_h[i + ni * j]);
-        }
-    }
-    fclose(fp);
+    // fp = fopen(argv[5], "w");
+    // fprintf(fp, "%d %d\n", ni, nj);
+    // for (j = 0; j < nj; j++)
+    // {
+    //     for (i = 0; i < ni; i++)
+    //     {
+    //         fprintf(fp, "%d \t %d \t %.4f\n", j, i, temp1_h[i + ni * j]);
+    //     }
+    // }
+    // fclose(fp);
 
 } // end main
